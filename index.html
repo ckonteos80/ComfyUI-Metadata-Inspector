@@ -47,6 +47,13 @@ tr:hover td{background:#fafaf8}
 .tooltip{position:fixed;background:#fff;border:0.5px solid #ccc;border-radius:8px;padding:6px 10px;font-size:11.5px;color:#1a1a1a;max-width:340px;white-space:normal;line-height:1.5;pointer-events:none;z-index:9999;display:none;word-break:break-all;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
 #empty-state{text-align:center;padding:1.5rem;color:#777;font-size:13px}
 .hidden-col{display:none}
+tr.selected td{background:#eaf2ff}
+td.preview-td{cursor:pointer}
+tr.selected td.preview-td .preview-wrap{outline:2px solid #1a56db;outline-offset:-2px}
+#btn-del{color:#c0392b;border-color:#f0b0b0}
+#btn-del:not(:disabled):hover{background:#fde8e8!important;color:#c0392b}
+#copy-btn{position:fixed;font-size:10px;padding:1px 6px;background:#fff;border:0.5px solid #ccc;border-radius:4px;cursor:pointer;z-index:9998;display:none;color:#555;line-height:1.7;user-select:none;box-shadow:0 1px 4px rgba(0,0,0,0.1)}
+#copy-btn:hover{background:#f0f0f0}
 @media(prefers-color-scheme:dark){
   body{background:#1a1a1a;color:#e8e8e8}
   #drop-zone{background:#242424;border-color:#444}
@@ -64,7 +71,13 @@ tr:hover td{background:#fafaf8}
   th.sort-asc .sort-icon,th.sort-desc .sort-icon{color:#7eb3f5}
   .col-resizer:hover,.col-resizer.dragging{background:#555}
   td{color:#e8e8e8;border-bottom-color:#2a2a2a}
+  tr.selected td{background:#1e3050}
+  tr.selected td.preview-td .preview-wrap{outline-color:#7eb3f5}
   tr:hover td{background:#242424}
+  #btn-del{color:#f07070;border-color:#5a2020}
+  #btn-del:not(:disabled):hover{background:#3d1515!important;color:#f07070}
+  #copy-btn{background:#2a2a2a;border-color:#444;color:#aaa}
+  #copy-btn:hover{background:#333}
   .tag{background:#1e3a5f;color:#7eb3f5}
   .tag.err{background:#3d1515;color:#f07070}
   .lora-pill{background:#2a2a2a;color:#aaa;border-color:#3a3a3a}
@@ -86,6 +99,8 @@ tr:hover td{background:#fafaf8}
   <button id="btn-csv" disabled onclick="exportCSV()">Export CSV</button>
   <button id="btn-json" disabled onclick="exportJSON()">Export JSON</button>
   <button id="btn-clear" disabled onclick="clearAll()">Clear</button>
+  <button id="btn-selall" disabled onclick="toggleAll()">Select all</button>
+  <button id="btn-del" disabled onclick="deleteSelected()">Delete selected</button>
   <span id="count"></span>
 </div>
 <div id="col-toggles"><span>Columns:</span></div>
@@ -98,8 +113,10 @@ tr:hover td{background:#fafaf8}
 </div>
 <div id="empty-state">No images loaded yet</div>
 <div class="tooltip" id="tooltip"></div>
+<div id="copy-btn" onclick="doCopy()">⎘</div>
 <script>
 var rows=[],sortKey=null,sortDir=1,PIDX=0;
+var rowId=0,selected=new Set(),lastCheckedIdx=-1;
 var COLS=[
   {key:'preview',label:'Preview',vis:true,numeric:false,w:90,noSort:true,noExport:true,render:function(r){
     var pw=Math.max(30,COLS[PIDX].w-12),ph=pw;
@@ -128,6 +145,7 @@ var COLS=[
 ];
 var tog=document.getElementById('col-toggles');
 COLS.forEach(function(col){
+  if(col.noToggle)return;
   var b=document.createElement('button');b.className='col-btn'+(col.vis?'':' off');b.textContent=col.label;
   b.onclick=function(){col.vis=!col.vis;b.className='col-btn'+(col.vis?'':' off');renderTable();};
   col._btn=b;tog.appendChild(b);
@@ -215,13 +233,14 @@ function renderTable(){
     var inn=document.createElement('div');inn.className='th-inner';
     inn.innerHTML='<span>'+esc(col.label)+'</span>'+(icon?'<span class="sort-icon">'+icon+'</span>':'');
     if(!col.noSort){(function(c){inn.onclick=function(){if(sortKey===c.key)sortDir*=-1;else{sortKey=c.key;sortDir=1;}renderTable();};})(col);}
-    var res=document.createElement('div');res.className='col-resizer';
-    th.appendChild(inn);th.appendChild(res);tr.appendChild(th);
+    th.appendChild(inn);
+    if(!col.noResize){var res=document.createElement('div');res.className='col-resizer';th.appendChild(res);}
+    tr.appendChild(th);
   });
   buildCG();initResizers();
   var tb=document.getElementById('tbody'),s=getSortedRows(),h='';
   s.forEach(function(r){
-    h+='<tr>';
+    h+='<tr data-rid="'+r._id+'"'+(selected.has(r._id)?' class="selected"':'')+'>';
     COLS.forEach(function(col,i){
       var cls='col-'+i+(col.vis?'':' hidden-col');
       if(col.key==='preview')cls+=' preview-td';else if(col.prompt)cls+=' prompt-td';
@@ -231,7 +250,8 @@ function renderTable(){
   });
   tb.innerHTML=h;
   document.getElementById('count').textContent=rows.length+' image'+(rows.length!==1?'s':'');
-  ['btn-csv','btn-json','btn-clear'].forEach(function(id){document.getElementById(id).disabled=rows.length===0;});
+  ['btn-csv','btn-json','btn-clear','btn-selall'].forEach(function(id){document.getElementById(id).disabled=rows.length===0;});
+  updateSelUI();
 }
 function render(){
   var es=document.getElementById('empty-state'),tbl=document.getElementById('main-table');
@@ -245,7 +265,7 @@ dz.addEventListener('drop',function(e){e.preventDefault();dz.classList.remove('d
 document.getElementById('fi').addEventListener('change',function(e){handleFiles(e.target.files);});
 function handleFiles(files){var a=Array.prototype.slice.call(files).filter(function(f){return f.name.toLowerCase().endsWith('.png');});if(!a.length){alert('Please select PNG files.');return;}a.forEach(function(f){processFile(f);});}
 function processFile(file){
-  var row={file:file.name,loras:[]};
+  var row={file:file.name,loras:[],_id:++rowId};
   row.filesize=Math.round(file.size/1024);
   if(file.lastModified){var d=new Date(file.lastModified);row.filedate=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());row._filedateTs=file.lastModified;}
   var ur=new FileReader();
@@ -355,7 +375,40 @@ function extractParams(row,wf,pr){
   row.loras=[];for(var k2 in lm)if(lm.hasOwnProperty(k2))row.loras.push(lm[k2]);
 }
 function esc(s){if(s===undefined||s===null)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-function clearAll(){rows=[];document.getElementById('fi').value='';document.getElementById('main-table').style.display='none';document.getElementById('empty-state').style.display='block';document.getElementById('count').textContent='';sortKey=null;sortDir=1;['btn-csv','btn-json','btn-clear'].forEach(function(id){document.getElementById(id).disabled=true;});}
+function clearAll(){rows=[];selected.clear();rowId=0;lastCheckedIdx=-1;document.getElementById('fi').value='';document.getElementById('main-table').style.display='none';document.getElementById('empty-state').style.display='block';document.getElementById('count').textContent='';sortKey=null;sortDir=1;['btn-csv','btn-json','btn-clear','btn-selall','btn-del'].forEach(function(id){document.getElementById(id).disabled=true;});}
+document.getElementById('tbody').addEventListener('click',function(e){
+  var td=e.target.closest('td.preview-td');if(!td)return;
+  var tr2=td.closest('tr');if(!tr2)return;
+  var id=parseInt(tr2.getAttribute('data-rid'),10);if(isNaN(id))return;
+  var sorted=getSortedRows(),idx=-1;
+  for(var i=0;i<sorted.length;i++)if(sorted[i]._id===id){idx=i;break;}
+  if(e.shiftKey&&lastCheckedIdx>=0&&idx>=0&&idx!==lastCheckedIdx){
+    var from=Math.min(lastCheckedIdx,idx),to=Math.max(lastCheckedIdx,idx);
+    var checking=!selected.has(id);
+    for(var j=from;j<=to;j++){if(checking)selected.add(sorted[j]._id);else selected.delete(sorted[j]._id);}
+    lastCheckedIdx=idx;renderTable();
+  } else {
+    if(selected.has(id))selected.delete(id);else selected.add(id);
+    tr2.className=selected.has(id)?'selected':'';
+    lastCheckedIdx=idx;updateSelUI();
+  }
+});
+function toggleAll(){
+  var s=getSortedRows();
+  if(selected.size===s.length&&s.length>0){selected.clear();lastCheckedIdx=-1;}
+  else{s.forEach(function(r){selected.add(r._id);});}
+  renderTable();
+}
+function updateSelUI(){
+  var btn=document.getElementById('btn-del');if(btn)btn.disabled=selected.size===0;
+  var sa=document.getElementById('btn-selall');
+  if(sa){var t=getSortedRows().length;sa.textContent=(selected.size===t&&t>0)?'Deselect all':'Select all';}
+}
+function deleteSelected(){
+  rows=rows.filter(function(r){return !selected.has(r._id);});
+  selected.clear();lastCheckedIdx=-1;
+  render();
+}
 function exportCSV(){
   var vc=COLS.filter(function(c){return c.vis&&!c.noExport;});
   var lines=[vc.map(function(c){return '"'+c.label+'"';}).join(',')];
@@ -384,6 +437,35 @@ function dl(n,c,t){
   a.click();
   document.body.removeChild(a);
 }
+var cpBtn=document.getElementById('copy-btn'),cpTarget=null,cpHideTimer=null,cpText='';
+function getCopyText(td){
+  var el=td.querySelector('[data-tip]');if(el){var t=el.getAttribute('data-tip');if(t)return t;}
+  return td.textContent.trim();
+}
+function doCopy(){
+  if(!cpText)return;
+  var done=function(){cpBtn.textContent='✓';setTimeout(function(){cpBtn.textContent='⎘';},1000);};
+  if(navigator.clipboard){navigator.clipboard.writeText(cpText).then(done).catch(function(){});}
+  else{var ta=document.createElement('textarea');ta.value=cpText;ta.style.cssText='position:fixed;opacity:0';document.body.appendChild(ta);ta.focus();ta.select();try{document.execCommand('copy');done();}catch(ex){}document.body.removeChild(ta);}
+}
+function showCopyBtn(td){
+  var t=getCopyText(td);if(!t||t==='--'){cpBtn.style.display='none';return;}
+  cpText=t;
+  var rect=td.getBoundingClientRect();
+  cpBtn.style.display='block';cpBtn.textContent='⎘';
+  cpBtn.style.top=(rect.top+2)+'px';
+  cpBtn.style.left=Math.min(rect.right-28,window.innerWidth-34)+'px';
+}
+document.getElementById('tbody').addEventListener('mouseover',function(e){
+  var td=e.target.closest('td');if(!td||td.classList.contains('preview-td'))return;
+  if(td===cpTarget)return;
+  clearTimeout(cpHideTimer);cpTarget=td;showCopyBtn(td);
+});
+document.getElementById('tbody').addEventListener('mouseleave',function(){
+  cpHideTimer=setTimeout(function(){cpBtn.style.display='none';cpTarget=null;},200);
+});
+cpBtn.addEventListener('mouseenter',function(){clearTimeout(cpHideTimer);});
+cpBtn.addEventListener('mouseleave',function(){cpHideTimer=setTimeout(function(){cpBtn.style.display='none';cpTarget=null;},200);});
 </script>
 </body>
 </html>
